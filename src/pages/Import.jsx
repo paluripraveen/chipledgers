@@ -1,7 +1,38 @@
 import { useState, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { createWorker } from 'tesseract.js';
+import { useParams, useNavigate } from 'react-router-dom';
 import { importSession } from '../store/sessions';
+
+const VISION_API_KEY = import.meta.env.VITE_FIREBASE_API_KEY;
+const VISION_URL = `https://vision.googleapis.com/v1/images:annotate?key=${VISION_API_KEY}`;
+
+async function callVisionAPI(file) {
+  const base64 = await new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(',')[1]);
+    reader.readAsDataURL(file);
+  });
+
+  const body = {
+    requests: [{
+      image: { content: base64 },
+      features: [{ type: 'DOCUMENT_TEXT_DETECTION' }],
+    }],
+  };
+
+  const res = await fetch(VISION_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error?.message || 'Vision API error');
+  }
+
+  const data = await res.json();
+  return data.responses?.[0]?.fullTextAnnotation?.text || '';
+}
 
 function parseOCRText(text) {
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
@@ -9,39 +40,49 @@ function parseOCRText(text) {
   const players = [];
 
   for (const line of lines) {
-    // Try to find a date
-    const dateMatch = line.match(/(\d{4}[-/]\d{1,2}[-/]\d{1,2})/);
-    if (dateMatch) {
-      date = dateMatch[1].replace(/\//g, '-');
+    // Try to find date patterns
+    const dateISO = line.match(/(\d{4}[-/]\d{1,2}[-/]\d{1,2})/);
+    if (dateISO) {
+      date = dateISO[1].replace(/\//g, '-');
       continue;
     }
-    const dateMatch2 = line.match(/(\d{1,2}[-/]\d{1,2}[-/]\d{4})/);
-    if (dateMatch2) {
-      const parts = dateMatch2[1].split(/[-/]/);
-      date = `${parts[2]}-${parts[0].padStart(2, '0')}-${parts[1].padStart(2, '0')}`;
+    const dateUS = line.match(/(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})/);
+    if (dateUS) {
+      const parts = dateUS[1].split(/[-/]/);
+      const year = parts[2].length === 2 ? '20' + parts[2] : parts[2];
+      date = `${year}-${parts[0].padStart(2, '0')}-${parts[1].padStart(2, '0')}`;
       continue;
     }
 
-    // Try to find player + amount pattern
-    // Matches: "Name  $10.50", "Name  +10.50", "Name  -10.50", "Name  10.50", "Name 10"
+    // Player + amount: "Name  $10.50", "Name  +10", "Name  -5.25", "Name 10"
     const playerMatch = line.match(/^([a-zA-Z][a-zA-Z0-9 ]*?)\s+([+\-$]*\s*\d+\.?\d*)\s*$/);
     if (playerMatch) {
       const name = playerMatch[1].trim();
       const rawAmount = playerMatch[2].replace(/[$\s]/g, '');
       const amount = parseFloat(rawAmount);
       if (!isNaN(amount) && name.length > 0) {
-        // Treat the amount as net: positive = won, negative = lost
-        // In our system: net = buyIn - returned, so negative net = won
         players.push({
           name,
-          net: -amount, // flip sign: +10 in notes means won $10, which is net -10 in our system
+          net: -amount, // +10 in notes = won $10 = net -10 in our system
         });
       }
       continue;
     }
 
-    // Try simpler pattern: just a name on its own line
-    if (/^[a-zA-Z][a-zA-Z0-9 ]*$/.test(line) && line.length < 30) {
+    // Name with amount separated by colon or dash: "Name: 10", "Name - 10"
+    const colonMatch = line.match(/^([a-zA-Z][a-zA-Z0-9 ]*?)\s*[:\-–—]\s*([+\-$]*\s*\d+\.?\d*)\s*$/);
+    if (colonMatch) {
+      const name = colonMatch[1].trim();
+      const rawAmount = colonMatch[2].replace(/[$\s]/g, '');
+      const amount = parseFloat(rawAmount);
+      if (!isNaN(amount) && name.length > 0) {
+        players.push({ name, net: -amount });
+      }
+      continue;
+    }
+
+    // Just a name on its own line
+    if (/^[a-zA-Z][a-zA-Z0-9 ]*$/.test(line) && line.length > 1 && line.length < 30) {
       players.push({ name: line, net: 0 });
     }
   }
@@ -50,18 +91,18 @@ function parseOCRText(text) {
 }
 
 export default function Import() {
+  const { groupId } = useParams();
   const navigate = useNavigate();
   const fileRef = useRef(null);
   const [imageUrl, setImageUrl] = useState(null);
   const [processing, setProcessing] = useState(false);
-  const [progress, setProgress] = useState(0);
+  const [error, setError] = useState('');
   const [rawText, setRawText] = useState('');
   const [showRaw, setShowRaw] = useState(false);
 
-  // Editable parsed data
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [place, setPlace] = useState('');
-  const [players, setPlayers] = useState([]); // [{ name, buyIn, returned, net }]
+  const [players, setPlayers] = useState([]);
   const [parsed, setParsed] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -70,32 +111,36 @@ export default function Import() {
     const url = URL.createObjectURL(file);
     setImageUrl(url);
     setProcessing(true);
-    setProgress(0);
+    setError('');
 
-    const worker = await createWorker('eng', 1, {
-      logger: m => {
-        if (m.status === 'recognizing text') {
-          setProgress(Math.round(m.progress * 100));
-        }
-      },
-    });
+    try {
+      const text = await callVisionAPI(file);
+      setRawText(text);
 
-    const { data: { text } } = await worker.recognize(file);
-    await worker.terminate();
+      if (!text.trim()) {
+        setError('No text detected in the image. Try a clearer photo.');
+        setProcessing(false);
+        return;
+      }
 
-    setRawText(text);
-    const result = parseOCRText(text);
-    setDate(result.date);
+      const result = parseOCRText(text);
+      setDate(result.date);
 
-    // Convert parsed players to editable format
-    setPlayers(result.players.map(p => ({
-      name: p.name,
-      buyIn: Math.abs(p.net) > 0 ? Math.max(10, Math.ceil(Math.abs(p.net) / 10) * 10) : 10,
-      returned: Math.abs(p.net) > 0 ? (p.net < 0 ? Math.max(10, Math.ceil(Math.abs(p.net) / 10) * 10) - p.net : Math.max(10, Math.ceil(Math.abs(p.net) / 10) * 10) + p.net) : 10,
-      net: p.net,
-    })));
+      setPlayers(result.players.map(p => ({
+        name: p.name,
+        buyIn: Math.abs(p.net) > 0 ? Math.max(10, Math.ceil(Math.abs(p.net) / 10) * 10) : 10,
+        returned: Math.abs(p.net) > 0
+          ? (p.net < 0
+            ? Math.max(10, Math.ceil(Math.abs(p.net) / 10) * 10) - p.net
+            : Math.max(10, Math.ceil(Math.abs(p.net) / 10) * 10) + p.net)
+          : 10,
+        net: p.net,
+      })));
 
-    setParsed(true);
+      setParsed(true);
+    } catch (err) {
+      setError(`OCR failed: ${err.message}`);
+    }
     setProcessing(false);
   }
 
@@ -122,8 +167,8 @@ export default function Import() {
     const valid = players.filter(p => p.name.trim());
     if (valid.length < 2) return;
     setSaving(true);
-    await importSession(date, valid, place.trim());
-    navigate('/');
+    await importSession(date, valid, place.trim(), groupId);
+    navigate(groupId ? `/group/${groupId}` : '/');
   }
 
   function reset() {
@@ -131,16 +176,16 @@ export default function Import() {
     setRawText('');
     setPlayers([]);
     setParsed(false);
-    setProgress(0);
+    setError('');
     setDate(new Date().toISOString().split('T')[0]);
     setPlace('');
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       <header className="bg-emerald-700 text-white py-4 px-4">
         <div className="max-w-lg mx-auto flex items-center justify-between">
-          <button onClick={() => navigate('/')} className="text-emerald-200 hover:text-white text-sm">
+          <button onClick={() => navigate(groupId ? `/group/${groupId}` : '/')} className="text-emerald-200 hover:text-white text-sm">
             &larr; Home
           </button>
           <h1 className="text-lg font-bold">Import Session</h1>
@@ -153,15 +198,17 @@ export default function Import() {
         {!parsed && (
           <div className="space-y-3">
             <div
-              onClick={() => fileRef.current?.click()}
-              className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-emerald-500 transition-colors"
+              onClick={() => !processing && fileRef.current?.click()}
+              className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
+                processing ? 'border-gray-200 dark:border-gray-700 cursor-wait' : 'border-gray-300 dark:border-gray-600 cursor-pointer hover:border-emerald-500'
+              }`}
             >
               {imageUrl ? (
                 <img src={imageUrl} alt="Uploaded" className="max-h-64 mx-auto rounded" />
               ) : (
                 <div>
                   <p className="text-3xl mb-2">&#128247;</p>
-                  <p className="text-gray-600 font-medium">Tap to upload or take photo</p>
+                  <p className="text-gray-600 dark:text-gray-400 font-medium">Tap to upload or take photo</p>
                   <p className="text-gray-400 text-xs mt-1">Photo of handwritten session notes</p>
                 </div>
               )}
@@ -177,14 +224,17 @@ export default function Import() {
 
             {processing && (
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-center">
-                <p className="text-blue-700 text-sm font-medium">Reading text from image...</p>
-                <div className="w-full bg-blue-200 rounded-full h-2 mt-2">
-                  <div
-                    className="bg-blue-600 h-2 rounded-full transition-all"
-                    style={{ width: `${progress}%` }}
-                  />
+                <p className="text-blue-700 text-sm font-medium">Reading handwritten text with Google Cloud Vision...</p>
+                <div className="mt-2 flex justify-center">
+                  <div className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
                 </div>
-                <p className="text-blue-500 text-xs mt-1">{progress}%</p>
+              </div>
+            )}
+
+            {error && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                <p className="text-red-600 text-sm">{error}</p>
+                <button onClick={reset} className="text-red-500 text-xs underline mt-1">Try again</button>
               </div>
             )}
           </div>
@@ -193,15 +243,20 @@ export default function Import() {
         {/* Step 2: Review & Edit parsed data */}
         {parsed && (
           <div className="space-y-4">
+            {/* Image preview */}
+            {imageUrl && (
+              <img src={imageUrl} alt="Source" className="max-h-32 mx-auto rounded border border-gray-200 dark:border-gray-700" />
+            )}
+
             {/* Raw text toggle */}
             <button
               onClick={() => setShowRaw(!showRaw)}
-              className="text-xs text-gray-400 hover:text-gray-600"
+              className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
             >
               {showRaw ? 'Hide' : 'Show'} raw OCR text
             </button>
             {showRaw && (
-              <pre className="bg-gray-100 p-3 rounded text-xs text-gray-600 max-h-40 overflow-y-auto whitespace-pre-wrap">
+              <pre className="bg-gray-100 dark:bg-gray-800 p-3 rounded text-xs text-gray-600 dark:text-gray-400 max-h-40 overflow-y-auto whitespace-pre-wrap">
                 {rawText}
               </pre>
             )}
@@ -209,22 +264,22 @@ export default function Import() {
             {/* Date & Place */}
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Date</label>
+                <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Date</label>
                 <input
                   type="date"
                   value={date}
                   onChange={e => setDate(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Place (optional)</label>
+                <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Place (optional)</label>
                 <input
                   type="text"
                   value={place}
                   onChange={e => setPlace(e.target.value)}
                   placeholder="e.g. John's place"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 />
               </div>
             </div>
@@ -232,7 +287,7 @@ export default function Import() {
             {/* Players table */}
             <div>
               <div className="flex justify-between items-center mb-2">
-                <h2 className="font-semibold text-gray-700 text-sm">Players ({players.length})</h2>
+                <h2 className="font-semibold text-gray-700 dark:text-gray-300 text-sm">Players ({players.length})</h2>
                 <button
                   onClick={addRow}
                   className="px-3 py-1 bg-emerald-600 text-white rounded text-xs font-medium hover:bg-emerald-700 transition-colors"
@@ -257,22 +312,22 @@ export default function Import() {
                       value={p.name}
                       onChange={e => updatePlayer(i, 'name', e.target.value)}
                       placeholder="Name"
-                      className="px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      className="px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     />
                     <input
                       type="number"
                       value={p.buyIn}
                       onChange={e => updatePlayer(i, 'buyIn', e.target.value)}
-                      className="px-1 py-1.5 border border-gray-300 rounded text-sm text-right focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      className="px-1 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm text-right dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     />
                     <input
                       type="number"
                       value={p.returned}
                       onChange={e => updatePlayer(i, 'returned', e.target.value)}
-                      className="px-1 py-1.5 border border-gray-300 rounded text-sm text-right focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      className="px-1 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm text-right dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     />
                     <span className={`text-right text-xs font-medium ${
-                      p.net > 0 ? 'text-red-600' : p.net < 0 ? 'text-green-600' : 'text-gray-600'
+                      p.net > 0 ? 'text-red-600' : p.net < 0 ? 'text-green-600' : 'text-gray-600 dark:text-gray-400'
                     }`}>
                       {p.net > 0 ? `-$${p.net.toFixed(0)}` : p.net < 0 ? `+$${Math.abs(p.net).toFixed(0)}` : '$0'}
                     </span>
@@ -306,7 +361,7 @@ export default function Import() {
             })()}
 
             <p className="text-xs text-gray-400">
-              Review and edit the parsed data. Fix any OCR misreads before saving. Buy-in and return totals must balance.
+              Review and edit the parsed data. Fix any misreads before saving.
             </p>
 
             {/* Actions */}
@@ -320,7 +375,7 @@ export default function Import() {
               </button>
               <button
                 onClick={reset}
-                className="px-4 py-3 border border-gray-300 rounded-lg text-gray-600 hover:bg-gray-100 transition-colors"
+                className="px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
               >
                 Start Over
               </button>

@@ -93,18 +93,18 @@ export default function NewPlayerForm({ onAdd, existingNames = [], allKnownNames
           onFocus={() => name.trim() && setShowSuggestions(true)}
           placeholder="Player name"
           autoComplete="off"
-          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
         />
         {showSuggestions && suggestions.length > 0 && (
-          <ul className="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-40 overflow-y-auto">
+          <ul className="absolute z-10 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg max-h-40 overflow-y-auto">
             {suggestions.map((s, i) => (
               <li
                 key={s}
                 onClick={() => handleSelect(s)}
                 className={`px-3 py-2 text-sm cursor-pointer ${
                   i === selectedIndex
-                    ? 'bg-emerald-100 text-emerald-800'
-                    : 'hover:bg-gray-50 text-gray-700'
+                    ? 'bg-emerald-100 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-200'
+                    : 'hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300'
                 }`}
               >
                 {s}

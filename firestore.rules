@@ -7,5 +7,11 @@ service cloud.firestore {
     match /settlements/{settlementId} {
       allow read, write: if true;
     }
+    match /players/{playerId} {
+      allow read, write: if true;
+    }
+    match /groups/{groupId} {
+      allow read, write: if true;
+    }
   }
 }

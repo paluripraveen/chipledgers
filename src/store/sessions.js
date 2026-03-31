@@ -21,8 +21,6 @@ function sessionDoc(id) {
   return doc(db, COLLECTION, id);
 }
 
-// Normalize player data coming from Firestore
-// Firestore drops null fields, so we restore defaults
 function normalizePlayers(players) {
   return (players || []).map(p => ({
     ...p,
@@ -41,10 +39,14 @@ function normalizeSession(id, data) {
   };
 }
 
-export async function getSessions() {
+export async function getSessions(groupId) {
   const q = query(sessionsRef(), orderBy('date', 'desc'));
   const snap = await getDocs(q);
-  return snap.docs.map(d => normalizeSession(d.id, d.data()));
+  const all = snap.docs.map(d => normalizeSession(d.id, d.data()));
+  if (groupId) {
+    return all.filter(s => s.groupId === groupId);
+  }
+  return all;
 }
 
 export async function getSession(id) {
@@ -53,11 +55,12 @@ export async function getSession(id) {
   return normalizeSession(snap.id, snap.data());
 }
 
-export async function createSession(date, playerNames, place = '') {
+export async function createSession(date, playerNames, place = '', groupId = '') {
   const id = crypto.randomUUID();
   const session = {
     date,
     place,
+    groupId,
     status: 'active',
     players: playerNames.map(name => ({
       id: crypto.randomUUID(),
@@ -105,6 +108,20 @@ export async function addBuyIn(sessionId, playerId, amount) {
   await updateDoc(sessionDoc(sessionId), { players: session.players });
 }
 
+export async function undoBuyIn(sessionId, playerId) {
+  const session = await getSession(sessionId);
+  if (!session) return;
+  const player = session.players.find(p => p.id === playerId);
+  if (!player || player.buyIns.length <= 1) return; // keep at least initial buy-in
+  player.buyIns.pop();
+  player.totalBuyIn = player.buyIns.reduce((sum, v) => sum + v, 0);
+  await updateDoc(sessionDoc(sessionId), { players: session.players });
+}
+
+export async function updateSessionNotes(sessionId, notes) {
+  await updateDoc(sessionDoc(sessionId), { notes });
+}
+
 export async function setChipsReturned(sessionId, playerId, amount) {
   const session = await getSession(sessionId);
   if (!session) return;
@@ -115,13 +132,12 @@ export async function setChipsReturned(sessionId, playerId, amount) {
   await updateDoc(sessionDoc(sessionId), { players: session.players });
 }
 
-// Import a completed session from parsed image data
-// players: [{ name, buyIn, returned, net }]
-export async function importSession(date, players, place = '') {
+export async function importSession(date, players, place = '', groupId = '') {
   const id = crypto.randomUUID();
   const session = {
     date,
     place,
+    groupId,
     status: 'completed',
     players: players.map(p => ({
       id: crypto.randomUUID(),
@@ -143,4 +159,14 @@ export async function endSession(sessionId) {
 
 export async function deleteSession(sessionId) {
   await deleteDoc(sessionDoc(sessionId));
+}
+
+// Archive all completed sessions for a group by marking them as archived
+export async function archiveSeason(groupId, seasonLabel) {
+  const sessions = await getSessions(groupId);
+  const completed = sessions.filter(s => s.status === 'completed' && !s.archived);
+  for (const session of completed) {
+    await updateDoc(sessionDoc(session.id), { archived: true, season: seasonLabel });
+  }
+  return completed.length;
 }

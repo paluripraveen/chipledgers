@@ -9,12 +9,12 @@ export default function TallyBar({ players }) {
     <div className={`p-4 rounded-lg border-2 ${balanced ? 'bg-green-50 border-green-400' : 'bg-amber-50 border-amber-400'}`}>
       <div className="flex justify-between items-center text-sm font-medium">
         <div>
-          <span className="text-gray-600">Total Buy-In:</span>{' '}
-          <span className="text-gray-900 font-bold">${totalBuyIn.toFixed(2)}</span>
+          <span className="text-gray-600 dark:text-gray-400">Total Buy-In:</span>{' '}
+          <span className="text-gray-900 dark:text-gray-100 font-bold">${totalBuyIn.toFixed(2)}</span>
         </div>
         <div>
-          <span className="text-gray-600">Total Returned:</span>{' '}
-          <span className="text-gray-900 font-bold">${totalReturned.toFixed(2)}</span>
+          <span className="text-gray-600 dark:text-gray-400">Total Returned:</span>{' '}
+          <span className="text-gray-900 dark:text-gray-100 font-bold">${totalReturned.toFixed(2)}</span>
         </div>
         <div>
           {balanced ? (
