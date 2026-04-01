@@ -61,12 +61,17 @@ export default function Admin() {
 
   useEffect(() => {
     if (!authenticated) return;
-    Promise.all([getSessions(groupId), getSettlements(groupId), getPlayers()]).then(([s, st, p]) => {
-      setSessions(s);
-      setSettlements(st);
-      setAllPlayers(p);
-      setLoading(false);
-    });
+    Promise.all([getSessions(groupId), getSettlements(groupId), getPlayers()])
+      .then(([s, st, p]) => {
+        setSessions(s);
+        setSettlements(st);
+        setAllPlayers(p);
+        setLoading(false);
+      })
+      .catch(err => {
+        console.error('Admin load error:', err);
+        setLoading(false);
+      });
   }, [authenticated, groupId]);
 
   function handleLogin(e) {
@@ -100,13 +105,14 @@ export default function Admin() {
   async function handleDeletePlayer(id) {
     if (!confirm('Delete this player? Past session data is preserved but they will be removed from groups.')) return;
     await deletePlayer(id);
-    await refresh();
+    setAllPlayers(prev => prev.filter(p => p.id !== id));
   }
 
   async function handleDelete(id) {
     if (!confirm('Are you sure you want to delete this session? This cannot be undone.')) return;
     await deleteSession(id);
-    await refresh();
+    // Remove from local state immediately for instant UI update
+    setSessions(prev => prev.filter(s => s.id !== id));
   }
 
   // Calculate balances from completed sessions

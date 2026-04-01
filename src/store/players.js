@@ -6,8 +6,6 @@ import {
   setDoc,
   updateDoc,
   deleteDoc,
-  query,
-  orderBy,
 } from 'firebase/firestore';
 import { db } from '../firebase';
 
@@ -22,9 +20,9 @@ function playerDoc(id) {
 }
 
 export async function getPlayers() {
-  const q = query(playersRef(), orderBy('firstName', 'asc'));
-  const snap = await getDocs(q);
-  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const snap = await getDocs(playersRef());
+  const players = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  return players.sort((a, b) => (a.firstName || '').localeCompare(b.firstName || ''));
 }
 
 export async function getPlayer(id) {
