@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Home from './pages/Home';
 import Players from './pages/Players';
@@ -8,8 +9,15 @@ import Summary from './pages/Summary';
 import Stats from './pages/Stats';
 import Admin from './pages/Admin';
 import Import from './pages/Import';
+import Login from './pages/Login';
 
 export default function App() {
+  const [isAuthed, setIsAuthed] = useState(() => !!localStorage.getItem('cl_auth'));
+
+  if (!isAuthed) {
+    return <Login onLogin={() => setIsAuthed(true)} />;
+  }
+
   return (
     <BrowserRouter>
       <Routes>

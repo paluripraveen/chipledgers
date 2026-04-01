@@ -21,9 +21,15 @@ export default function Home() {
             <h1 className="text-2xl font-bold">ChipLedgers</h1>
             <p className="text-emerald-200 text-sm mt-1">Poker Session Tracker</p>
           </div>
-          <div className="flex gap-3">
+          <div className="flex gap-3 items-center">
             <button onClick={() => navigate('/players')} className="text-emerald-200 hover:text-white text-sm font-medium">Players</button>
             <button onClick={() => navigate('/groups')} className="text-emerald-200 hover:text-white text-sm font-medium">Groups</button>
+            <button
+              onClick={() => { localStorage.removeItem('cl_auth'); window.location.reload(); }}
+              className="text-emerald-300 hover:text-white text-sm font-medium border border-emerald-500 rounded px-2 py-0.5"
+            >
+              Sign Out
+            </button>
           </div>
         </div>
       </header>
