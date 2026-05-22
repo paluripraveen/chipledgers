@@ -7,7 +7,7 @@ import {
   updateDoc,
   deleteDoc,
   query,
-  orderBy,
+  where,
 } from 'firebase/firestore';
 import { db } from '../firebase';
 
@@ -26,13 +26,16 @@ function normalizeGroup(id, data) {
     id,
     ...data,
     playerIds: data.playerIds || [],
+    memberUids: data.memberUids || [],
+    adminUids: data.adminUids || [],
   };
 }
 
-export async function getGroups() {
-  const q = query(groupsRef(), orderBy('name', 'asc'));
+export async function getGroups(uid) {
+  const q = query(groupsRef(), where('memberUids', 'array-contains', uid));
   const snap = await getDocs(q);
-  return snap.docs.map(d => normalizeGroup(d.id, d.data()));
+  const groups = snap.docs.map(d => normalizeGroup(d.id, d.data()));
+  return groups.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export async function getGroup(id) {
@@ -41,11 +44,14 @@ export async function getGroup(id) {
   return normalizeGroup(snap.id, snap.data());
 }
 
-export async function createGroup(name) {
+export async function createGroup(name, uid) {
   const id = crypto.randomUUID();
   const group = {
     name: name.trim(),
     playerIds: [],
+    createdBy: uid,
+    memberUids: [uid],
+    adminUids: [uid],
     createdAt: new Date().toISOString(),
   };
   await setDoc(groupDoc(id), group);
@@ -65,6 +71,16 @@ export async function removePlayerFromGroup(groupId, playerId) {
   if (!group) return;
   group.playerIds = group.playerIds.filter(id => id !== playerId);
   await updateDoc(groupDoc(groupId), { playerIds: group.playerIds });
+}
+
+export async function joinGroup(groupId, uid, playerId) {
+  const group = await getGroup(groupId);
+  if (!group) return;
+  const memberUids = group.memberUids.includes(uid) ? group.memberUids : [...group.memberUids, uid];
+  const playerIds = playerId && !group.playerIds.includes(playerId)
+    ? [...group.playerIds, playerId]
+    : group.playerIds;
+  await updateDoc(groupDoc(groupId), { memberUids, playerIds });
 }
 
 export async function deleteGroup(id) {

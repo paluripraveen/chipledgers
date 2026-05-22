@@ -1,27 +1,38 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getGroups, createGroup, addPlayerToGroup, removePlayerFromGroup, deleteGroup } from '../store/groups';
+import { getGroups, createGroup, removePlayerFromGroup, deleteGroup } from '../store/groups';
 import { getPlayers, playerDisplayName } from '../store/players';
+import { createInvite, getGroupInvites } from '../store/invites';
+import { sendInviteEmail } from '../utils/email';
+import { useAuth } from '../contexts/AuthContext';
 
 export default function Groups() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [groups, setGroups] = useState([]);
   const [players, setPlayers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [newName, setNewName] = useState('');
+  const [nameError, setNameError] = useState('');
   const [expanded, setExpanded] = useState({});
-  const [addingTo, setAddingTo] = useState(null); // groupId currently adding player to
+  const [invitingTo, setInvitingTo] = useState(null);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteError, setInviteError] = useState('');
+  const [inviteSuccess, setInviteSuccess] = useState('');
+  const [groupInvites, setGroupInvites] = useState({});
 
   useEffect(() => {
-    Promise.all([getGroups(), getPlayers()]).then(([g, p]) => {
-      setGroups(g);
-      setPlayers(p);
-      setLoading(false);
-    });
-  }, []);
+    if (user) {
+      Promise.all([getGroups(user.uid), getPlayers()]).then(([g, p]) => {
+        setGroups(g);
+        setPlayers(p);
+        setLoading(false);
+      }).catch(() => setLoading(false));
+    }
+  }, [user]);
 
   async function refresh() {
-    const [g, p] = await Promise.all([getGroups(), getPlayers()]);
+    const [g, p] = await Promise.all([getGroups(user.uid), getPlayers()]);
     setGroups(g);
     setPlayers(p);
   }
@@ -29,16 +40,68 @@ export default function Groups() {
   async function handleCreateGroup(e) {
     e.preventDefault();
     if (!newName.trim()) return;
-    if (groups.some(g => g.name.toLowerCase() === newName.trim().toLowerCase())) return;
-    await createGroup(newName.trim());
+    if (groups.some(g => g.name.toLowerCase() === newName.trim().toLowerCase())) {
+      setNameError('A group with this name already exists.');
+      return;
+    }
+    setNameError('');
+    await createGroup(newName.trim(), user.uid);
     setNewName('');
     await refresh();
   }
 
-  async function handleAddPlayer(groupId, playerId) {
-    await addPlayerToGroup(groupId, playerId);
-    setAddingTo(null);
-    await refresh();
+  async function handleToggleGroup(groupId) {
+    const isOpen = expanded[groupId];
+    setExpanded(prev => ({ ...prev, [groupId]: !isOpen }));
+    if (!isOpen && !groupInvites[groupId]) {
+      const inv = await getGroupInvites(groupId);
+      setGroupInvites(prev => ({ ...prev, [groupId]: inv }));
+    }
+  }
+
+  async function handleInvite(e, group) {
+    e.preventDefault();
+    setInviteError('');
+    setInviteSuccess('');
+    const email = inviteEmail.trim().toLowerCase();
+    if (!email) return;
+
+    const members = getGroupPlayers(group);
+    if (members.some(p => p.email?.toLowerCase() === email)) {
+      setInviteError('This person is already a member of the group.');
+      return;
+    }
+    const pending = groupInvites[group.id] || [];
+    if (pending.some(i => i.invitedEmail === email)) {
+      setInviteError('An invite has already been sent to this email.');
+      return;
+    }
+
+    const inviterName = user.displayName || user.email;
+    const inviteId = await createInvite({
+      groupId: group.id,
+      groupName: group.name,
+      inviterName,
+      invitedEmail: email,
+    });
+
+    let emailOk = true;
+    try {
+      await sendInviteEmail({
+        to_email: email,
+        group_name: group.name,
+        inviter_name: inviterName,
+        invite_url: `${window.location.origin}/invite/${inviteId}`,
+      });
+    } catch (err) {
+      emailOk = false;
+      setInviteError(`Invite saved but email failed: ${err?.text || err?.message || 'Unknown error'}. Use Resend to try again.`);
+    }
+
+    const inv = await getGroupInvites(group.id);
+    setGroupInvites(prev => ({ ...prev, [group.id]: inv }));
+    setInviteEmail('');
+    if (emailOk) setInviteSuccess(`Invite sent to ${email}`);
   }
 
   async function handleRemovePlayer(groupId, playerId) {
@@ -74,17 +137,20 @@ export default function Groups() {
 
       <main className="max-w-lg mx-auto p-4 space-y-4">
         {/* Create Group */}
-        <form onSubmit={handleCreateGroup} className="flex gap-2">
-          <input
-            type="text"
-            value={newName}
-            onChange={e => setNewName(e.target.value)}
-            placeholder="New group name (e.g. TOSO)"
-            className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-          />
-          <button type="submit" className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors">
-            Create
-          </button>
+        <form onSubmit={handleCreateGroup} className="space-y-1">
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={newName}
+              onChange={e => { setNewName(e.target.value); setNameError(''); }}
+              placeholder="New group name (e.g. TOSO)"
+              className={`flex-1 px-3 py-2 border rounded-lg text-sm dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 ${nameError ? 'border-red-400 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'}`}
+            />
+            <button type="submit" className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors">
+              Create
+            </button>
+          </div>
+          {nameError && <p className="text-red-500 text-xs">{nameError}</p>}
         </form>
 
         {loading ? (
@@ -101,7 +167,7 @@ export default function Groups() {
               return (
                 <div key={group.id} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
                   <button
-                    onClick={() => setExpanded(prev => ({ ...prev, [group.id]: !prev[group.id] }))}
+                    onClick={() => handleToggleGroup(group.id)}
                     className="w-full p-3 flex items-center justify-between text-left hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
                   >
                     <div>
@@ -130,48 +196,79 @@ export default function Groups() {
                         ))
                       )}
 
-                      {/* Add Player */}
-                      {addingTo === group.id ? (
-                        <div className="border-t border-gray-100 dark:border-gray-700 pt-2">
-                          <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Select player to add:</p>
-                          {available.length === 0 ? (
-                            <p className="text-xs text-gray-400">All players are already in this group.</p>
-                          ) : (
-                            <div className="space-y-1 max-h-40 overflow-y-auto">
-                              {available.map(p => (
+                      {/* Pending Invites */}
+                      {(groupInvites[group.id] || []).length > 0 && (
+                        <div className="border-t border-gray-100 dark:border-gray-700 pt-2 space-y-1">
+                          <p className="text-xs font-medium text-gray-500 dark:text-gray-400">Pending Invites</p>
+                          {(groupInvites[group.id] || []).map(inv => (
+                            <div key={inv.id} className="flex items-center justify-between py-1 gap-2">
+                              <span className="text-sm text-gray-600 dark:text-gray-400 truncate">{inv.invitedEmail}</span>
+                              <div className="flex items-center gap-2 shrink-0">
                                 <button
-                                  key={p.id}
-                                  onClick={() => handleAddPlayer(group.id, p.id)}
-                                  className="w-full text-left px-2 py-1.5 text-sm rounded hover:bg-emerald-50 dark:hover:bg-emerald-900 text-gray-700 dark:text-gray-300 transition-colors"
+                                  onClick={async () => {
+                                    try {
+                                      await sendInviteEmail({
+                                        to_email: inv.invitedEmail,
+                                        group_name: group.name,
+                                        inviter_name: user.displayName || user.email,
+                                        invite_url: `${window.location.origin}/invite/${inv.id}`,
+                                      });
+                                      alert(`Invite resent to ${inv.invitedEmail}`);
+                                    } catch {
+                                      alert('Failed to resend. Please try again.');
+                                    }
+                                  }}
+                                  className="text-xs text-emerald-600 dark:text-emerald-400 hover:underline"
                                 >
-                                  {playerDisplayName(p)}
+                                  Resend
                                 </button>
-                              ))}
+                                <span className="text-xs bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300 px-2 py-0.5 rounded-full">Pending</span>
+                              </div>
                             </div>
-                          )}
-                          <button
-                            onClick={() => setAddingTo(null)}
-                            className="mt-2 text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="flex gap-2 border-t border-gray-100 dark:border-gray-700 pt-2">
-                          <button
-                            onClick={() => setAddingTo(group.id)}
-                            className="flex-1 py-1.5 bg-emerald-100 text-emerald-700 rounded text-xs font-medium hover:bg-emerald-200 transition-colors"
-                          >
-                            + Add Player
-                          </button>
-                          <button
-                            onClick={() => handleDeleteGroup(group.id)}
-                            className="px-3 py-1.5 bg-red-100 text-red-600 rounded text-xs font-medium hover:bg-red-200 transition-colors"
-                          >
-                            Delete Group
-                          </button>
+                          ))}
                         </div>
                       )}
+
+                      {/* Invite by Email */}
+                      <div className="border-t border-gray-100 dark:border-gray-700 pt-2">
+                        {invitingTo === group.id ? (
+                          <form onSubmit={e => handleInvite(e, group)} className="space-y-2">
+                            <input
+                              type="email"
+                              value={inviteEmail}
+                              onChange={e => { setInviteEmail(e.target.value); setInviteError(''); setInviteSuccess(''); }}
+                              placeholder="Enter email to invite"
+                              className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                              autoFocus
+                            />
+                            {inviteError && <p className="text-red-500 text-xs">{inviteError}</p>}
+                            {inviteSuccess && <p className="text-emerald-600 dark:text-emerald-400 text-xs">{inviteSuccess}</p>}
+                            <div className="flex gap-2">
+                              <button type="submit" className="flex-1 py-1.5 bg-emerald-600 text-white rounded text-xs font-medium hover:bg-emerald-700 transition-colors">
+                                Send Invite
+                              </button>
+                              <button type="button" onClick={() => { setInvitingTo(null); setInviteEmail(''); setInviteError(''); setInviteSuccess(''); }} className="px-3 py-1.5 text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+                                Cancel
+                              </button>
+                            </div>
+                          </form>
+                        ) : (
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => { setInvitingTo(group.id); setInviteError(''); setInviteSuccess(''); }}
+                              className="flex-1 py-1.5 bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300 rounded text-xs font-medium hover:bg-emerald-200 dark:hover:bg-emerald-800 transition-colors"
+                            >
+                              + Invite Member
+                            </button>
+                            <button
+                              onClick={() => handleDeleteGroup(group.id)}
+                              className="px-3 py-1.5 bg-red-100 text-red-600 dark:bg-red-900 dark:text-red-300 rounded text-xs font-medium hover:bg-red-200 dark:hover:bg-red-800 transition-colors"
+                            >
+                              Delete Group
+                            </button>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>

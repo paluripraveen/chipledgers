@@ -7,6 +7,7 @@ import {
   updateDoc,
   deleteDoc,
 } from 'firebase/firestore';
+
 import { db } from '../firebase';
 
 const COLLECTION = 'players';
@@ -58,6 +59,28 @@ export async function updatePlayer(id, fields) {
 
 export async function deletePlayer(id) {
   await deleteDoc(playerDoc(id));
+}
+
+export async function findOrCreatePlayerForUser(user) {
+  const snap = await getDoc(playerDoc(user.uid));
+  if (snap.exists()) return { id: snap.id, ...snap.data() };
+
+  const displayName = user.displayName || '';
+  const nameParts = displayName.trim().split(/\s+/);
+  const firstName = nameParts[0] || user.email?.split('@')[0] || '';
+  const lastName = nameParts.slice(1).join(' ') || '';
+
+  const player = {
+    firstName,
+    lastName,
+    email: user.email || '',
+    phone: '',
+    paypalId: '',
+    uid: user.uid,
+    createdAt: new Date().toISOString(),
+  };
+  await setDoc(playerDoc(user.uid), player);
+  return { id: user.uid, ...player };
 }
 
 export function playerDisplayName(player) {
