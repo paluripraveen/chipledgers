@@ -5,6 +5,7 @@ import {
   setDoc,
   query,
   orderBy,
+  where,
 } from 'firebase/firestore';
 import { db } from '../firebase';
 
@@ -15,13 +16,11 @@ function settlementsRef() {
 }
 
 export async function getSettlements(groupId) {
-  const q = query(settlementsRef(), orderBy('date', 'desc'));
+  const constraints = [orderBy('date', 'desc')];
+  if (groupId) constraints.unshift(where('groupId', '==', groupId));
+  const q = query(settlementsRef(), ...constraints);
   const snap = await getDocs(q);
-  const all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-  if (groupId) {
-    return all.filter(s => s.groupId === groupId);
-  }
-  return all;
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 }
 
 export async function recordSettlement(from, to, amount, groupId = '') {

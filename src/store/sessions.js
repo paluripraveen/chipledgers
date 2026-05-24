@@ -8,6 +8,7 @@ import {
   deleteDoc,
   query,
   orderBy,
+  where,
 } from 'firebase/firestore';
 import { db } from '../firebase';
 
@@ -40,13 +41,11 @@ function normalizeSession(id, data) {
 }
 
 export async function getSessions(groupId) {
-  const q = query(sessionsRef(), orderBy('date', 'desc'));
+  const constraints = [orderBy('date', 'desc')];
+  if (groupId) constraints.unshift(where('groupId', '==', groupId));
+  const q = query(sessionsRef(), ...constraints);
   const snap = await getDocs(q);
-  const all = snap.docs.map(d => normalizeSession(d.id, d.data()));
-  if (groupId) {
-    return all.filter(s => s.groupId === groupId);
-  }
-  return all;
+  return snap.docs.map(d => normalizeSession(d.id, d.data()));
 }
 
 export async function getSession(id) {
