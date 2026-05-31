@@ -29,6 +29,11 @@ export default function PlayerRow({ player, onBuyIn, onUndo, onRemove }) {
               ? 'No buy-ins yet'
               : `${player.buyIns.length} buy-in${player.buyIns.length > 1 ? 's' : ''} = $${player.totalBuyIn}`}
           </p>
+          {player.buyIns.length > 1 && (
+            <p className="text-xs font-bold text-amber-500 dark:text-amber-400">
+              {player.buyIns.length - 1} re-buy{player.buyIns.length - 1 > 1 ? 's' : ''}
+            </p>
+          )}
         </div>
         {onUndo && player.buyIns.length > 1 && (
           <button

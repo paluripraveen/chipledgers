@@ -53,9 +53,35 @@ export default function Session() {
 
   async function refresh() { setSession(await getSession(id)); }
   async function handleAddPlayer(name) { await addPlayer(id, name); await refresh(); }
-  async function handleBuyIn(playerId, amount) { await addBuyIn(id, playerId, amount); await refresh(); }
-  async function handleUndo(playerId) { await undoBuyIn(id, playerId); await refresh(); }
-  async function handleRemove(playerId) { await removePlayer(id, playerId); await refresh(); }
+
+  function handleBuyIn(playerId, amount) {
+    setSession(prev => ({
+      ...prev,
+      players: prev.players.map(p => {
+        if (p.id !== playerId) return p;
+        const newBuyIns = [...p.buyIns, amount];
+        return { ...p, buyIns: newBuyIns, totalBuyIn: newBuyIns.reduce((s, v) => s + v, 0) };
+      }),
+    }));
+    addBuyIn(id, playerId, amount).catch(() => refresh());
+  }
+
+  function handleUndo(playerId) {
+    setSession(prev => ({
+      ...prev,
+      players: prev.players.map(p => {
+        if (p.id !== playerId || p.buyIns.length <= 1) return p;
+        const newBuyIns = p.buyIns.slice(0, -1);
+        return { ...p, buyIns: newBuyIns, totalBuyIn: newBuyIns.reduce((s, v) => s + v, 0) };
+      }),
+    }));
+    undoBuyIn(id, playerId).catch(() => refresh());
+  }
+
+  function handleRemove(playerId) {
+    setSession(prev => ({ ...prev, players: prev.players.filter(p => p.id !== playerId) }));
+    removePlayer(id, playerId).catch(() => refresh());
+  }
 
   async function handleSaveNotes() {
     await updateSessionNotes(id, notes);
@@ -66,6 +92,7 @@ export default function Session() {
   const sessionNames = session.players.map(p => p.name.toLowerCase());
   const availableMembers = groupMembers.filter(m => !sessionNames.includes(playerDisplayName(m).toLowerCase()));
   const totalBuyIn = session.players.reduce((sum, p) => sum + p.totalBuyIn, 0);
+  const totalReBuys = session.players.reduce((sum, p) => sum + Math.max(0, p.buyIns.length - 1), 0);
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
@@ -89,6 +116,11 @@ export default function Session() {
                 Total Pool: <span className="text-lg font-bold">${totalBuyIn.toFixed(2)}</span>
               </p>
               <p className="text-xs text-emerald-600 dark:text-emerald-400">{session.players.length} players</p>
+              {totalReBuys > 0 && (
+                <p className="text-xs font-bold text-amber-500 dark:text-amber-400 mt-0.5">
+                  {totalReBuys} re-buy{totalReBuys > 1 ? 's' : ''} total
+                </p>
+              )}
             </div>
             <div className="text-center px-3 py-1 bg-emerald-100 dark:bg-emerald-800 rounded-lg">
               <p className="text-xs text-emerald-600 dark:text-emerald-300">Duration</p>
