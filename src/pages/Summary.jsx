@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { getSession, setChipsReturned, endSession } from '../store/sessions';
 import TallyBar from '../components/TallyBar';
@@ -9,6 +9,8 @@ export default function Summary() {
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
   const [returnInputs, setReturnInputs] = useState({});
+  const [finalizing, setFinalizing] = useState(false);
+  const pendingSave = useRef(Promise.resolve());
 
   useEffect(() => {
     getSession(id).then(data => {
@@ -27,41 +29,87 @@ export default function Summary() {
 
   async function refresh() { setSession(await getSession(id)); }
 
-  async function handleReturnChange(playerId, value) {
-    setReturnInputs(prev => ({ ...prev, [playerId]: value }));
+  function parseReturn(value) {
     const num = parseFloat(value);
-    if (!isNaN(num) && num >= 0) {
-      await setChipsReturned(id, playerId, num);
-      const updated = await getSession(id);
-      setSession(updated);
+    return !isNaN(num) && num >= 0 ? num : null;
+  }
 
-      const totalBuyIn = updated.players.reduce((sum, p) => sum + p.totalBuyIn, 0);
-      const enteredPlayers = updated.players.filter(p => p.chipsReturned != null);
-      const emptyPlayers = updated.players.filter(p => p.chipsReturned == null);
+  function syncInputs(updated) {
+    setSession(updated);
+    setReturnInputs(Object.fromEntries(updated.players.map(p => [p.id, p.chipsReturned != null ? String(p.chipsReturned) : ''])));
+  }
 
-      if (emptyPlayers.length > 0) {
-        const enteredTotal = enteredPlayers.reduce((sum, p) => sum + p.chipsReturned, 0);
-        if (Math.abs(totalBuyIn - enteredTotal) < 0.01) {
-          for (const p of emptyPlayers) {
-            await setChipsReturned(id, p.id, 0);
-          }
-          const final = await getSession(id);
-          setSession(final);
-          setReturnInputs(Object.fromEntries(final.players.map(p => [p.id, p.chipsReturned != null ? String(p.chipsReturned) : ''])));
+  function handleReturnChange(playerId, value) {
+    setReturnInputs(prev => ({ ...prev, [playerId]: value }));
+  }
+
+  // Save on blur (not per keystroke) so partial values never race each other
+  function handleReturnSave(playerId) {
+    pendingSave.current = pendingSave.current.then(() => saveReturn(playerId)).catch(() => refresh());
+  }
+
+  async function saveReturn(playerId) {
+    const num = parseReturn(returnInputs[playerId]);
+    if (num == null) return;
+    const current = session.players.find(p => p.id === playerId);
+    if (current && current.chipsReturned === num) return;
+    let updated = await setChipsReturned(id, { [playerId]: num });
+    if (!updated) return;
+
+    const totalBuyIn = updated.players.reduce((sum, p) => sum + p.totalBuyIn, 0);
+    const enteredTotal = updated.players.reduce((sum, p) => sum + (p.chipsReturned ?? 0), 0);
+    const emptyPlayers = updated.players.filter(p => p.chipsReturned == null);
+    if (emptyPlayers.length > 0 && Math.abs(totalBuyIn - enteredTotal) < 0.01) {
+      updated = await setChipsReturned(id, Object.fromEntries(emptyPlayers.map(p => [p.id, 0])));
+    }
+    // Keep any other inputs the user is still editing
+    setSession(updated);
+    setReturnInputs(prev => {
+      const next = { ...prev };
+      for (const p of updated.players) {
+        if (p.id === playerId || parseReturn(prev[p.id]) == null) {
+          next[p.id] = p.chipsReturned != null ? String(p.chipsReturned) : '';
         }
       }
-    }
+      return next;
+    });
   }
 
   async function handleEndSession() {
-    await endSession(id);
-    await refresh();
+    if (finalizing) return;
+    setFinalizing(true);
+    try {
+      await pendingSave.current;
+      // Persist every visible input in one transaction, then check the stored totals
+      const amounts = {};
+      for (const p of session.players) {
+        const num = parseReturn(returnInputs[p.id]);
+        if (num != null) amounts[p.id] = num;
+      }
+      const updated = await setChipsReturned(id, amounts);
+      if (!updated) return;
+      const total = updated.players.reduce((sum, p) => sum + p.totalBuyIn, 0);
+      const returned = updated.players.reduce((sum, p) => sum + (p.chipsReturned ?? 0), 0);
+      if (!updated.players.every(p => p.chipsReturned != null) || Math.abs(total - returned) >= 0.01) {
+        syncInputs(updated);
+        return;
+      }
+      await endSession(id);
+      await refresh();
+    } finally {
+      setFinalizing(false);
+    }
   }
 
   const isCompleted = session.status === 'completed';
-  const allReturned = session.players.every(p => p.chipsReturned != null);
-  const totalBuyIn = session.players.reduce((sum, p) => sum + p.totalBuyIn, 0);
-  const totalReturned = session.players.reduce((sum, p) => sum + (p.chipsReturned ?? 0), 0);
+  // Reflect what's typed in the inputs so totals and net update while editing
+  const displayPlayers = isCompleted ? session.players : session.players.map(p => {
+    const chipsReturned = parseReturn(returnInputs[p.id]);
+    return { ...p, chipsReturned, net: chipsReturned != null ? p.totalBuyIn - chipsReturned : null };
+  });
+  const allReturned = displayPlayers.every(p => p.chipsReturned != null);
+  const totalBuyIn = displayPlayers.reduce((sum, p) => sum + p.totalBuyIn, 0);
+  const totalReturned = displayPlayers.reduce((sum, p) => sum + (p.chipsReturned ?? 0), 0);
   const balanced = allReturned && Math.abs(totalBuyIn - totalReturned) < 0.01;
 
   const backPath = groupId ? `/group/${groupId}` : '/';
@@ -82,7 +130,7 @@ export default function Summary() {
       </header>
 
       <main className="max-w-lg mx-auto p-4 space-y-4">
-        <TallyBar players={session.players} />
+        <TallyBar players={displayPlayers} />
 
         <div className="space-y-2">
           <div className="grid grid-cols-[1fr_80px_80px_80px] gap-2 text-xs font-semibold text-gray-500 dark:text-gray-400 px-1">
@@ -91,7 +139,7 @@ export default function Summary() {
             <span className="text-right">Returned</span>
             <span className="text-right">Net</span>
           </div>
-          {session.players.map(player => (
+          {displayPlayers.map(player => (
             <div key={player.id} className="grid grid-cols-[1fr_80px_80px_80px] gap-2 items-center p-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg">
               <span className="font-medium text-gray-900 dark:text-gray-100 truncate">{player.name}</span>
               <span className="text-right text-sm text-gray-700 dark:text-gray-300">${player.totalBuyIn.toFixed(2)}</span>
@@ -99,7 +147,7 @@ export default function Summary() {
                 {isCompleted ? (
                   <span className="text-sm text-gray-700 dark:text-gray-300">${(player.chipsReturned ?? 0).toFixed(2)}</span>
                 ) : (
-                  <input type="number" min="0" step="any" value={returnInputs[player.id] ?? ''} onChange={e => handleReturnChange(player.id, e.target.value)} placeholder="$"
+                  <input type="number" min="0" step="any" value={returnInputs[player.id] ?? ''} onChange={e => handleReturnChange(player.id, e.target.value)} onBlur={() => handleReturnSave(player.id)} placeholder="$"
                     className="w-full px-1 py-1 border border-gray-300 dark:border-gray-600 rounded text-sm text-right dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                 )}
               </div>
@@ -122,7 +170,7 @@ export default function Summary() {
         )}
 
         {!isCompleted && (
-          <button onClick={handleEndSession} disabled={!allReturned || !balanced}
+          <button onClick={handleEndSession} disabled={!allReturned || !balanced || finalizing}
             className="w-full py-3 bg-emerald-600 text-white rounded-lg font-medium hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
             {!allReturned ? 'Enter all chip returns to finalize' : !balanced ? 'Totals must balance to finalize' : 'Finalize Session'}
           </button>

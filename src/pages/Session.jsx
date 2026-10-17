@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { getSession, addPlayer, addBuyIn, undoBuyIn, removePlayer, updateSessionNotes } from '../store/sessions';
 import { getGroup } from '../store/groups';
@@ -24,6 +24,8 @@ export default function Session() {
   const [elapsed, setElapsed] = useState(0);
   const [notes, setNotes] = useState('');
   const [notesSaved, setNotesSaved] = useState(false);
+  const [ending, setEnding] = useState(false);
+  const pendingWrites = useRef(new Set());
 
   useEffect(() => {
     Promise.all([getSession(id), getGroup(groupId)]).then(async ([s, g]) => {
@@ -52,6 +54,18 @@ export default function Session() {
   if (session.status === 'completed') { navigate(`/group/${groupId}/summary/${id}`, { replace: true }); return null; }
 
   async function refresh() { setSession(await getSession(id)); }
+  // Optimistic updates write in the background; track them so End Session waits for all to land
+  function track(promise) {
+    const p = promise.catch(() => refresh()).finally(() => pendingWrites.current.delete(p));
+    pendingWrites.current.add(p);
+  }
+
+  async function handleEndSession() {
+    setEnding(true);
+    await Promise.all(pendingWrites.current);
+    navigate(`/group/${groupId}/summary/${id}`);
+  }
+
   async function handleAddPlayer(name) { await addPlayer(id, name); await refresh(); }
 
   function handleBuyIn(playerId, amount) {
@@ -63,7 +77,7 @@ export default function Session() {
         return { ...p, buyIns: newBuyIns, totalBuyIn: newBuyIns.reduce((s, v) => s + v, 0) };
       }),
     }));
-    addBuyIn(id, playerId, amount).catch(() => refresh());
+    track(addBuyIn(id, playerId, amount));
   }
 
   function handleUndo(playerId) {
@@ -75,12 +89,12 @@ export default function Session() {
         return { ...p, buyIns: newBuyIns, totalBuyIn: newBuyIns.reduce((s, v) => s + v, 0) };
       }),
     }));
-    undoBuyIn(id, playerId).catch(() => refresh());
+    track(undoBuyIn(id, playerId));
   }
 
   function handleRemove(playerId) {
     setSession(prev => ({ ...prev, players: prev.players.filter(p => p.id !== playerId) }));
-    removePlayer(id, playerId).catch(() => refresh());
+    track(removePlayer(id, playerId));
   }
 
   async function handleSaveNotes() {
@@ -174,10 +188,10 @@ export default function Session() {
           </button>
         </div>
 
-        <button onClick={() => navigate(`/group/${groupId}/summary/${id}`)}
-          disabled={session.players.every(p => p.totalBuyIn === 0)}
+        <button onClick={handleEndSession}
+          disabled={ending || session.players.every(p => p.totalBuyIn === 0)}
           className="w-full py-3 bg-amber-600 text-white rounded-lg font-medium hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
-          End Session &rarr;
+          {ending ? 'Saving...' : <>End Session &rarr;</>}
         </button>
       </main>
     </div>

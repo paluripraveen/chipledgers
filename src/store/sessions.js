@@ -8,6 +8,7 @@ import {
   deleteDoc,
   query,
   orderBy,
+  runTransaction,
 } from 'firebase/firestore';
 import { db } from '../firebase';
 
@@ -22,13 +23,18 @@ function sessionDoc(id) {
 }
 
 function normalizePlayers(players) {
-  return (players || []).map(p => ({
-    ...p,
-    buyIns: p.buyIns || [],
-    totalBuyIn: p.totalBuyIn || 0,
-    chipsReturned: typeof p.chipsReturned === 'number' && p.chipsReturned >= 0 ? p.chipsReturned : null,
-    net: typeof p.net === 'number' && p.chipsReturned >= 0 ? p.net : null,
-  }));
+  return (players || []).map(p => {
+    const totalBuyIn = p.totalBuyIn || 0;
+    const chipsReturned = typeof p.chipsReturned === 'number' && p.chipsReturned >= 0 ? p.chipsReturned : null;
+    return {
+      ...p,
+      buyIns: p.buyIns || [],
+      totalBuyIn,
+      chipsReturned,
+      // Always derive net; the stored value can be stale if buy-ins changed after chips were returned
+      net: chipsReturned != null ? totalBuyIn - chipsReturned : null,
+    };
+  });
 }
 
 function normalizeSession(id, data) {
@@ -37,6 +43,27 @@ function normalizeSession(id, data) {
     ...data,
     players: normalizePlayers(data.players),
   };
+}
+
+// Keep a player's derived fields in sync with their buy-ins and chips returned
+function recalcPlayer(player) {
+  player.totalBuyIn = player.buyIns.reduce((sum, v) => sum + v, 0);
+  if (player.chipsReturned != null) player.net = player.totalBuyIn - player.chipsReturned;
+}
+
+// Read-modify-write the players array inside a transaction so concurrent
+// updates (rapid taps, multiple devices) retry instead of overwriting each other
+async function updatePlayers(sessionId, mutate) {
+  return runTransaction(db, async tx => {
+    const ref = sessionDoc(sessionId);
+    const snap = await tx.get(ref);
+    if (!snap.exists()) return null;
+    const session = normalizeSession(snap.id, snap.data());
+    const result = mutate(session);
+    if (result === false) return null;
+    tx.update(ref, { players: session.players });
+    return result;
+  });
 }
 
 export async function getSessions(groupId) {
@@ -76,8 +103,6 @@ export async function createSession(date, playerNames, place = '', groupId = '')
 }
 
 export async function addPlayer(sessionId, name) {
-  const session = await getSession(sessionId);
-  if (!session) return null;
   const player = {
     id: crypto.randomUUID(),
     name: name.trim(),
@@ -86,50 +111,50 @@ export async function addPlayer(sessionId, name) {
     chipsReturned: -1,
     net: -1,
   };
-  session.players.push(player);
-  await updateDoc(sessionDoc(sessionId), { players: session.players });
-  return player;
+  return updatePlayers(sessionId, session => {
+    session.players.push(player);
+    return player;
+  });
 }
 
 export async function removePlayer(sessionId, playerId) {
-  const session = await getSession(sessionId);
-  if (!session) return;
-  session.players = session.players.filter(p => p.id !== playerId);
-  await updateDoc(sessionDoc(sessionId), { players: session.players });
+  await updatePlayers(sessionId, session => {
+    session.players = session.players.filter(p => p.id !== playerId);
+  });
 }
 
 export async function addBuyIn(sessionId, playerId, amount) {
-  const session = await getSession(sessionId);
-  if (!session) return;
-  const player = session.players.find(p => p.id === playerId);
-  if (!player) return;
-  player.buyIns.push(amount);
-  player.totalBuyIn = player.buyIns.reduce((sum, v) => sum + v, 0);
-  await updateDoc(sessionDoc(sessionId), { players: session.players });
+  await updatePlayers(sessionId, session => {
+    const player = session.players.find(p => p.id === playerId);
+    if (!player) return false;
+    player.buyIns.push(amount);
+    recalcPlayer(player);
+  });
 }
 
 export async function undoBuyIn(sessionId, playerId) {
-  const session = await getSession(sessionId);
-  if (!session) return;
-  const player = session.players.find(p => p.id === playerId);
-  if (!player || player.buyIns.length <= 1) return; // keep at least initial buy-in
-  player.buyIns.pop();
-  player.totalBuyIn = player.buyIns.reduce((sum, v) => sum + v, 0);
-  await updateDoc(sessionDoc(sessionId), { players: session.players });
+  await updatePlayers(sessionId, session => {
+    const player = session.players.find(p => p.id === playerId);
+    if (!player || player.buyIns.length <= 1) return false; // keep at least initial buy-in
+    player.buyIns.pop();
+    recalcPlayer(player);
+  });
 }
 
 export async function updateSessionNotes(sessionId, notes) {
   await updateDoc(sessionDoc(sessionId), { notes });
 }
 
-export async function setChipsReturned(sessionId, playerId, amount) {
-  const session = await getSession(sessionId);
-  if (!session) return;
-  const player = session.players.find(p => p.id === playerId);
-  if (!player) return;
-  player.chipsReturned = amount;
-  player.net = player.totalBuyIn - amount;
-  await updateDoc(sessionDoc(sessionId), { players: session.players });
+// amounts: { [playerId]: chipsReturned } -- applied together in one transaction
+export async function setChipsReturned(sessionId, amounts) {
+  return updatePlayers(sessionId, session => {
+    for (const player of session.players) {
+      if (!(player.id in amounts)) continue;
+      player.chipsReturned = amounts[player.id];
+      recalcPlayer(player);
+    }
+    return session;
+  });
 }
 
 export async function importSession(date, players, place = '', groupId = '') {
