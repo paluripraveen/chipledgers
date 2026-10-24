@@ -14,8 +14,11 @@ const COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'
 function getStreak(sessionDetails) {
   let streak = 0;
   let type = null;
-  for (let i = sessionDetails.length - 1; i >= 0; i--) {
-    const won = sessionDetails[i].net < 0;
+  // sessionDetails is newest-first (getSessions orders by date desc)
+  for (let i = 0; i < sessionDetails.length; i++) {
+    const { net } = sessionDetails[i];
+    if (net === 0) continue; // break-even neither extends nor ends a streak
+    const won = net < 0;
     if (type === null) type = won;
     if (won === type) streak++;
     else break;
@@ -24,7 +27,7 @@ function getStreak(sessionDetails) {
   return { count: streak, type: type ? 'win' : 'loss' };
 }
 
-function exportCSV(players, completed) {
+function exportCSV(players) {
   const headers = ['Player', 'Games', 'Wins', 'Losses', 'Total Buy-In', 'Total Returned', 'Net', 'Buy-In Count'];
   const rows = players.map(p => [
     p.name, p.sessionDetails.length, p.wins, p.losses,
@@ -211,7 +214,7 @@ export default function Stats() {
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${h2hMode ? 'bg-emerald-600 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300'}`}>
                 {h2hMode ? 'Close H2H' : 'Head-to-Head'}
               </button>
-              <button onClick={() => exportCSV(allPlayers, completed)}
+              <button onClick={() => exportCSV(allPlayers)}
                 className="px-3 py-1.5 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg text-xs font-medium hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors">
                 Export CSV
               </button>
