@@ -81,6 +81,7 @@ export default function GroupHome() {
           </div>
           <div className="flex gap-3">
             <button onClick={() => navigate(`/group/${groupId}/stats`)} className="text-emerald-200 hover:text-white text-sm font-medium">Stats</button>
+            <button onClick={() => navigate(`/group/${groupId}/awards`)} className="text-emerald-200 hover:text-white text-sm font-medium">Awards</button>
             <button onClick={() => navigate(`/group/${groupId}/import`)} className="text-emerald-200 hover:text-white text-sm font-medium">Import</button>
             <button onClick={() => navigate(`/group/${groupId}/admin`)} className="text-emerald-200 hover:text-white text-sm font-medium">Settle</button>
           </div>

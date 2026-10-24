@@ -10,6 +10,7 @@ const GroupHome = lazy(() => import('./pages/GroupHome'));
 const Session = lazy(() => import('./pages/Session'));
 const Summary = lazy(() => import('./pages/Summary'));
 const Stats = lazy(() => import('./pages/Stats'));
+const Awards = lazy(() => import('./pages/Awards'));
 const Admin = lazy(() => import('./pages/Admin'));
 const Import = lazy(() => import('./pages/Import'));
 const OddsLobby = lazy(() => import('./pages/OddsLobby'));
@@ -35,6 +36,7 @@ export default function App() {
           <Route path="/group/:groupId/session/:id" element={<Session />} />
           <Route path="/group/:groupId/summary/:id" element={<Summary />} />
           <Route path="/group/:groupId/stats" element={<Stats />} />
+          <Route path="/group/:groupId/awards" element={<Awards />} />
           <Route path="/group/:groupId/admin" element={<Admin />} />
           <Route path="/group/:groupId/import" element={<Import />} />
         </Route>

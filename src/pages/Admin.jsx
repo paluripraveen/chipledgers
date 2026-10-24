@@ -445,6 +445,10 @@ export default function Admin() {
           {archiveResult && (
             <p className="text-green-600 text-sm mt-2">{archiveResult}</p>
           )}
+          <button onClick={() => navigate(`/group/${groupId}/awards`)}
+            className="mt-2 text-emerald-600 dark:text-emerald-400 text-xs font-medium hover:underline">
+            See season awards &rarr;
+          </button>
         </div>
       </main>
     </div>
