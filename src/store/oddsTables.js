@@ -122,7 +122,18 @@ export function setBoard(code, board) {
   return updateDoc(tableDoc(code), { board, updatedAt: serverTimestamp() });
 }
 
-// Clears the board and folds; everyone picks new cards for the next hand
+// Host setting: show win % during the hand. Off by default, since players can use it to
+// fold beaten hands.
+export function setLiveOdds(code, liveOdds) {
+  return updateDoc(tableDoc(code), { liveOdds, updatedAt: serverTimestamp() });
+}
+
+// Host reveals every live hand and the true win % to the whole table, e.g. at all-in
+export function setRevealed(code, revealed) {
+  return updateDoc(tableDoc(code), { revealed, updatedAt: serverTimestamp() });
+}
+
+// Clears the board, folds and any reveal; everyone picks new cards for the next hand
 export function nextHand(code) {
   return runTransaction(db, async tx => {
     const ref = tableDoc(code);
@@ -132,7 +143,7 @@ export function nextHand(code) {
     const players = Object.fromEntries(
       Object.entries(data.players || {}).map(([uid, p]) => [uid, { ...p, folded: false }]),
     );
-    tx.update(ref, { handNumber: (data.handNumber || 1) + 1, board: [], players, updatedAt: serverTimestamp() });
+    tx.update(ref, { handNumber: (data.handNumber || 1) + 1, board: [], players, revealed: false, updatedAt: serverTimestamp() });
   });
 }
 
@@ -159,4 +170,8 @@ export function subscribeMyOdds(code, uid, onData, onError) {
 
 export function subscribeStatus(code, onData, onError) {
   return subscribe(doc(db, COLLECTION, code, 'public', 'status'), onData, onError);
+}
+
+export function subscribeReveal(code, onData, onError) {
+  return subscribe(doc(db, COLLECTION, code, 'public', 'reveal'), onData, onError);
 }

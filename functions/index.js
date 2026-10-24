@@ -8,7 +8,8 @@ const db = getFirestore();
 
 // Live odds tables. Players' hole cards live in oddsTables/{code}/hands/{uid}, readable only
 // by their owner. This is the only place that sees every hand: on any change to the table it
-// recomputes the odds and writes each player's result to oddsTables/{code}/odds/{uid}.
+// recomputes the odds and writes each player's result to oddsTables/{code}/odds/{uid}, and the
+// hands the host has revealed to oddsTables/{code}/public/reveal.
 // Clients always touch the table doc after changing their hand, so this trigger covers both.
 export const tableOdds = onDocumentWritten(
   // Same region as the Firestore database
@@ -31,7 +32,7 @@ export const tableOdds = onDocumentWritten(
     if (!tableSnap.exists) return;
 
     const hands = Object.fromEntries(handsSnap.docs.map(d => [d.id, d.data()]));
-    const { key, status, odds } = computeTableOdds(tableSnap.data(), hands);
+    const { key, status, odds, reveal } = computeTableOdds(tableSnap.data(), hands);
     if (stateSnap.exists && stateSnap.get('key') === key) return;
 
     await db.runTransaction(async tx => {
@@ -43,6 +44,7 @@ export const tableOdds = onDocumentWritten(
         tx.set(tableRef.collection('odds').doc(uid), { ...data, updatedAt });
       }
       tx.set(tableRef.collection('public').doc('status'), { ...status, updatedAt });
+      tx.set(tableRef.collection('public').doc('reveal'), { ...reveal, updatedAt });
       tx.set(stateRef, { key });
     });
   },

@@ -8,14 +8,29 @@ function validCards(cards, count) {
   return Array.isArray(cards) && cards.length === count && cards.every(c => parseCard(c) >= 0);
 }
 
+// Which win/tie/lose numbers a table may see:
+// - 'solo': one player practising alone. Hand and outs only; there is nobody to beat.
+// - 'hidden': the default with 2+ players. Win % against the real hands would tell a player
+//   to fold a beaten hand, so it is held back until the host reveals (all-in or showdown).
+// - 'live': the host turned on win % during the hand, e.g. for a practice or friendly game.
+// - 'revealed': the host revealed the hands; everyone sees all live cards and win %.
+export function oddsMode(table) {
+  if (Object.keys(table.players || {}).length <= 1) return 'solo';
+  if (table.revealed) return 'revealed';
+  return table.liveOdds ? 'live' : 'hidden';
+}
+
 // Works out what every player at the table should see, from the public table doc and the
-// private hand docs. Each result goes only to its own player. `key` changes only when an
-// input that affects the odds changes, so repeat triggers can be skipped.
+// private hand docs. Each odds result goes only to its own player; `reveal` is public and
+// empty unless the host has revealed the hands. `key` changes only when an input that affects
+// the results changes, so repeat triggers can be skipped.
 export function computeTableOdds(table, hands, options = {}) {
   const handNumber = table.handNumber || 1;
   const board = Array.isArray(table.board) ? table.board : [];
-  const street = STREETS[board.length];
+  const street = STREETS[board.length] || null;
   const players = Object.entries(table.players || {}).sort(([a], [b]) => a.localeCompare(b));
+  const mode = oddsMode(table);
+  const showEquity = mode === 'live' || mode === 'revealed';
 
   const live = players.filter(([, p]) => !p.folded);
   const withCards = live.filter(([uid, p]) => {
@@ -30,32 +45,35 @@ export function computeTableOdds(table, hands, options = {}) {
   for (const c of board) seen.set(c, (seen.get(c) || 0) + 1);
   for (const [uid] of withCards) for (const c of hands[uid].cards) seen.set(c, (seen.get(c) || 0) + 1);
   const duplicates = new Set([...seen].filter(([, n]) => n > 1).map(([c]) => c));
-  const boardOk = street && validCards(board, board.length);
+  const ready = !!street && validCards(board, board.length) && duplicates.size === 0;
 
   const key = JSON.stringify({
     handNumber,
     board,
+    mode,
     players: players.map(([uid, p]) => [uid, !!p.folded, hasCards.has(uid) ? hands[uid].cards : null]),
   });
 
   const status = {
     handNumber,
-    street: street || null,
+    street,
+    mode,
     livePlayers: live.length,
     playersWithCards: withCards.length,
     conflict: duplicates.size > 0,
   };
 
-  const odds = {};
-  let equity = null;
-  if (boardOk && duplicates.size === 0 && withCards.length > 0) {
-    equity = calcEquity({ hands: withCards.map(([uid]) => hands[uid].cards), board, unknownCount, ...options });
-  }
+  // Only computed when someone is allowed to see it, so hidden numbers never leave the server
+  const equity = ready && showEquity && withCards.length > 0
+    ? calcEquity({ hands: withCards.map(([uid]) => hands[uid].cards), board, unknownCount, ...options })
+    : null;
 
-  withCards.forEach(([uid], i) => {
+  const odds = {};
+  const named = [];
+  withCards.forEach(([uid, p], i) => {
     const cards = hands[uid].cards;
     // Echo the player's own cards so their screen can tell these odds are for their current hand
-    const base = { handNumber, street: street || null, cards };
+    const base = { handNumber, street, mode, cards };
     const mine = cards.filter(c => duplicates.has(c));
     if (mine.length) {
       const onBoard = mine.find(c => board.includes(c));
@@ -68,7 +86,7 @@ export function computeTableOdds(table, hands, options = {}) {
       };
       return;
     }
-    if (!equity) {
+    if (!ready) {
       odds[uid] = {
         ...base,
         status: 'waiting',
@@ -76,26 +94,37 @@ export function computeTableOdds(table, hands, options = {}) {
       };
       return;
     }
-    const r = equity.results[i];
-    odds[uid] = {
+    const result = {
       ...base,
       status: 'ok',
-      win: round1(r.win),
-      tie: round1(r.tie),
-      lose: round1(r.lose),
-      method: equity.method,
-      trials: equity.trials,
-      knownOpponents: withCards.length - 1,
-      unknownOpponents: unknownCount,
       handName: board.length >= 3 ? handName([...cards, ...board].map(parseCard)) : null,
       outs: calcOuts(cards, board),
     };
+    if (equity) {
+      const r = equity.results[i];
+      Object.assign(result, {
+        win: round1(r.win),
+        tie: round1(r.tie),
+        lose: round1(r.lose),
+        method: equity.method,
+        trials: equity.trials,
+        knownOpponents: withCards.length - 1,
+        unknownOpponents: unknownCount,
+      });
+      named.push({ uid, name: p.name, cards, handName: result.handName, win: result.win, tie: result.tie, lose: result.lose });
+    }
+    odds[uid] = result;
   });
 
   for (const [uid, p] of players) {
     if (odds[uid]) continue;
-    odds[uid] = { handNumber, street: street || null, status: p.folded ? 'folded' : 'no-cards' };
+    odds[uid] = { handNumber, street, mode, status: p.folded ? 'folded' : 'no-cards' };
   }
 
-  return { key, status, odds };
+  // Folded hands stay hidden, as at a real table
+  const reveal = mode === 'revealed' && equity
+    ? { handNumber, street, board, players: named, unknownPlayers: unknownCount, method: equity.method }
+    : { handNumber, street, board, players: [] };
+
+  return { key, status, odds, reveal };
 }

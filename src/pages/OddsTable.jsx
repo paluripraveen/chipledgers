@@ -8,12 +8,15 @@ import {
   setMyCards,
   setFolded,
   setBoard,
+  setLiveOdds,
+  setRevealed,
   nextHand,
   endTable,
   subscribeTable,
   subscribeMyHand,
   subscribeMyOdds,
   subscribeStatus,
+  subscribeReveal,
   NAME_KEY,
   LAST_TABLE_KEY,
 } from '../store/oddsTables';
@@ -26,6 +29,13 @@ const STREETS = { 0: 'Pre-flop', 3: 'Flop', 4: 'Turn', 5: 'River' };
 const NEXT_STREET = { 0: { label: 'Flop', count: 3 }, 3: { label: 'Turn', count: 1 }, 4: { label: 'River', count: 1 } };
 
 const pct = x => `${x.toFixed(1)}%`;
+
+// Mirrors oddsMode in functions/table.js: which numbers this table may see right now
+function oddsMode(table) {
+  if (Object.keys(table.players || {}).length <= 1) return 'solo';
+  if (table.revealed) return 'revealed';
+  return table.liveOdds ? 'live' : 'hidden';
+}
 const sameCards = (a, b) => !!a && !!b && a.length === b.length && a.every(c => b.includes(c));
 
 const panel = 'bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4';
@@ -74,7 +84,7 @@ function SharePanel({ code }) {
   );
 }
 
-function BoardSection({ board, isHost, blocked, onSetBoard, onNextHand }) {
+function BoardSection({ board, isHost, blocked, canReveal, onSetBoard, onNextHand, onReveal }) {
   const [picking, setPicking] = useState(null); // { label, count } while choosing the next street
   const [selection, setSelection] = useState([]);
   const next = NEXT_STREET[board.length];
@@ -110,6 +120,11 @@ function BoardSection({ board, isHost, blocked, onSetBoard, onNextHand }) {
         <div className="flex flex-wrap gap-2 justify-center">
           {next && <button onClick={startPicking} className={primaryBtn}>Deal {next.label}</button>}
           {board.length > 0 && <button onClick={undo} className={secondaryBtn}>Undo {STREETS[board.length]}</button>}
+          {canReveal && (
+            <button onClick={onReveal} className={`${smallBtn} bg-gray-900 hover:bg-gray-700 text-white dark:bg-gray-100 dark:hover:bg-white dark:text-gray-900`}>
+              Reveal hands
+            </button>
+          )}
           <button onClick={onNextHand} className={`${smallBtn} bg-amber-600 hover:bg-amber-700 text-white`}>New hand</button>
         </div>
       )}
@@ -210,36 +225,43 @@ function OddsPanel({ odds, current }) {
     return <div className={`rounded-xl border p-4 text-center text-sm ${tone}`}>{text}</div>;
   }
 
-  const opponents = odds.knownOpponents + odds.unknownOpponents;
   const { outs } = odds;
+  const hasEquity = odds.win != null;
+  const opponents = hasEquity ? odds.knownOpponents + odds.unknownOpponents : 0;
 
   return (
     <div className={`${panel} space-y-4`}>
-      <div className="grid grid-cols-3 gap-2 text-center">
-        <div className="rounded-lg bg-emerald-50 dark:bg-emerald-900/30 py-2">
-          <p className="text-xs text-emerald-700 dark:text-emerald-300">Win</p>
-          <p className="text-2xl font-bold text-emerald-700 dark:text-emerald-300">{pct(odds.win)}</p>
-        </div>
-        <div className="rounded-lg bg-amber-50 dark:bg-amber-900/30 py-2">
-          <p className="text-xs text-amber-700 dark:text-amber-300">Tie</p>
-          <p className="text-2xl font-bold text-amber-700 dark:text-amber-300">{pct(odds.tie)}</p>
-        </div>
-        <div className="rounded-lg bg-red-50 dark:bg-red-900/30 py-2">
-          <p className="text-xs text-red-700 dark:text-red-300">Lose</p>
-          <p className="text-2xl font-bold text-red-700 dark:text-red-300">{pct(odds.lose)}</p>
-        </div>
-      </div>
+      {hasEquity && (
+        <>
+          <div className="grid grid-cols-3 gap-2 text-center">
+            <div className="rounded-lg bg-emerald-50 dark:bg-emerald-900/30 py-2">
+              <p className="text-xs text-emerald-700 dark:text-emerald-300">Win</p>
+              <p className="text-2xl font-bold text-emerald-700 dark:text-emerald-300">{pct(odds.win)}</p>
+            </div>
+            <div className="rounded-lg bg-amber-50 dark:bg-amber-900/30 py-2">
+              <p className="text-xs text-amber-700 dark:text-amber-300">Tie</p>
+              <p className="text-2xl font-bold text-amber-700 dark:text-amber-300">{pct(odds.tie)}</p>
+            </div>
+            <div className="rounded-lg bg-red-50 dark:bg-red-900/30 py-2">
+              <p className="text-xs text-red-700 dark:text-red-300">Lose</p>
+              <p className="text-2xl font-bold text-red-700 dark:text-red-300">{pct(odds.lose)}</p>
+            </div>
+          </div>
 
-      <div className="flex h-2.5 rounded-full overflow-hidden bg-gray-200 dark:bg-gray-700">
-        <div className="bg-emerald-500" style={{ width: `${odds.win}%` }} />
-        <div className="bg-amber-400" style={{ width: `${odds.tie}%` }} />
-        <div className="bg-red-500" style={{ width: `${odds.lose}%` }} />
-      </div>
+          <div className="flex h-2.5 rounded-full overflow-hidden bg-gray-200 dark:bg-gray-700">
+            <div className="bg-emerald-500" style={{ width: `${odds.win}%` }} />
+            <div className="bg-amber-400" style={{ width: `${odds.tie}%` }} />
+            <div className="bg-red-500" style={{ width: `${odds.lose}%` }} />
+          </div>
+        </>
+      )}
 
-      {odds.handName && (
+      {odds.handName ? (
         <p className="text-center text-gray-700 dark:text-gray-200">
           You have <span className="font-semibold">{odds.handName}</span>
         </p>
+      ) : !hasEquity && (
+        <p className="text-center text-sm text-gray-500 dark:text-gray-400">Your hand and outs show once the flop is dealt.</p>
       )}
 
       {outs && outs.total > 0 && (
@@ -263,15 +285,83 @@ function OddsPanel({ odds, current }) {
           ))}
         </div>
       )}
+      {outs && outs.total === 0 && (
+        <p className="text-center text-sm text-gray-500 dark:text-gray-400">No single card improves your hand.</p>
+      )}
 
       <p className="text-xs text-gray-400 text-center">
-        {opponents === 0
-          ? 'Everyone else has folded.'
-          : `Against ${opponents} player${opponents === 1 ? '' : 's'}`
-            + (odds.unknownOpponents ? ` (${odds.unknownOpponents} without cards counted as random)` : '')
-            + ` · ${odds.method === 'exact' ? 'exact' : `${odds.trials.toLocaleString()} simulated runouts`}`}
+        {hasEquity
+          ? (opponents === 0
+            ? 'Everyone else has folded.'
+            : `Against ${opponents} player${opponents === 1 ? '' : 's'}`
+              + (odds.unknownOpponents ? ` (${odds.unknownOpponents} without cards counted as random)` : '')
+              + ` · ${odds.method === 'exact' ? 'exact' : `${odds.trials.toLocaleString()} simulated runouts`}`)
+          : odds.mode === 'solo'
+            ? 'Practice table: you’re the only player, so this shows how your hand can improve.'
+            : 'Win % stays hidden until the host reveals the hands, so nobody can fold on it.'}
       </p>
     </div>
+  );
+}
+
+// Everyone's live hands and true win %, once the host reveals (all-in or showdown)
+function RevealPanel({ reveal, uid }) {
+  const players = [...reveal.players].sort((a, b) => b.win - a.win);
+  return (
+    <div className={`${panel} space-y-3`}>
+      <div className="flex items-center justify-between">
+        <h2 className="font-semibold text-gray-700 dark:text-gray-300 text-sm">Hands revealed</h2>
+        <span className="text-xs text-gray-400">{reveal.method === 'exact' ? 'exact' : 'simulated'}</span>
+      </div>
+      {players.map(p => (
+        <div key={p.uid} className="space-y-1">
+          <div className="flex items-center gap-2">
+            <div className="flex gap-1">
+              <PlayingCard card={p.cards[0]} size="sm" />
+              <PlayingCard card={p.cards[1]} size="sm" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-gray-800 dark:text-gray-100 truncate">
+                {p.name}{p.uid === uid && <span className="text-gray-400 text-sm"> (you)</span>}
+              </p>
+              {p.handName && <p className="text-xs text-gray-500 dark:text-gray-400">{p.handName}</p>}
+            </div>
+            <div className="text-right">
+              <p className="text-lg font-bold text-emerald-700 dark:text-emerald-300">{pct(p.win)}</p>
+              {p.tie > 0 && <p className="text-xs text-amber-600 dark:text-amber-400">tie {pct(p.tie)}</p>}
+            </div>
+          </div>
+          <div className="flex h-1.5 rounded-full overflow-hidden bg-gray-200 dark:bg-gray-700">
+            <div className="bg-emerald-500" style={{ width: `${p.win}%` }} />
+            <div className="bg-amber-400" style={{ width: `${p.tie}%` }} />
+          </div>
+        </div>
+      ))}
+      {reveal.unknownPlayers > 0 && (
+        <p className="text-xs text-gray-400 text-center">
+          {reveal.unknownPlayers} player{reveal.unknownPlayers === 1 ? '' : 's'} without cards counted as random
+        </p>
+      )}
+    </div>
+  );
+}
+
+function TableSettings({ liveOdds, onChange }) {
+  return (
+    <label className={`${panel} flex items-start gap-3 cursor-pointer`}>
+      <input
+        type="checkbox"
+        checked={liveOdds}
+        onChange={e => onChange(e.target.checked)}
+        className="mt-1 h-4 w-4 accent-emerald-600"
+      />
+      <span>
+        <span className="block text-sm font-medium text-gray-700 dark:text-gray-300">Show win % during the hand</span>
+        <span className="block text-xs text-gray-500 dark:text-gray-400">
+          Players could use it to fold beaten hands. Best for practice or friendly games; otherwise leave it off and reveal at all-in or showdown.
+        </span>
+      </span>
+    </label>
   );
 }
 
@@ -353,6 +443,7 @@ export default function OddsTable() {
   const [hand, setHand] = useState(null);
   const [odds, setOdds] = useState(null);
   const [status, setStatus] = useState(null);
+  const [reveal, setReveal] = useState(null);
   const [showShare, setShowShare] = useState(false);
   const [error, setError] = useState('');
 
@@ -368,6 +459,7 @@ export default function OddsTable() {
       subscribeMyHand(code, uid, setHand, onError),
       subscribeMyOdds(code, uid, setOdds, onError),
       subscribeStatus(code, setStatus, onError),
+      subscribeReveal(code, setReveal, onError),
     ];
     return () => unsubs.forEach(unsub => unsub());
   }, [code, uid]);
@@ -401,14 +493,22 @@ export default function OddsTable() {
   const myCards = me && me.cardsFor === handNumber && hand?.handNumber === handNumber ? hand.cards : null;
 
   // The function's result is current once it reflects this hand, street, cards and fold
+  const mode = oddsMode(table);
   const oddsCurrent = !!odds
     && odds.handNumber === handNumber
+    && odds.mode === mode
     && odds.street === { 0: 'preflop', 3: 'flop', 4: 'turn', 5: 'river' }[board.length]
     && (me?.folded
       ? odds.status === 'folded'
       : myCards
         ? odds.status !== 'folded' && odds.status !== 'no-cards' && sameCards(odds.cards, myCards)
         : odds.status === 'no-cards');
+
+  // Reveal needs at least two live hands; until then there's nothing to compare
+  const canReveal = (mode === 'hidden' || mode === 'live')
+    && Object.values(table.players || {}).filter(p => !p.folded && p.cardsFor === handNumber).length >= 2;
+  const showReveal = mode === 'revealed' && reveal?.handNumber === handNumber
+    && (reveal.board || []).length === board.length && reveal.players.length > 0;
 
   async function leave() {
     if (isHost) {
@@ -449,9 +549,13 @@ export default function OddsTable() {
           board={board}
           isHost={isHost}
           blocked={[...board, ...(myCards || [])]}
+          canReveal={canReveal}
           onSetBoard={b => act(() => setBoard(code, b))}
           onNextHand={() => act(() => nextHand(code))}
+          onReveal={() => act(() => setRevealed(code, true))}
         />
+
+        {showReveal && <RevealPanel reveal={reveal} uid={uid} />}
 
         {me ? (
           <>
@@ -485,6 +589,8 @@ export default function OddsTable() {
           onFold={(id, f) => act(() => setFolded(code, id, f))}
           onRemove={id => act(() => removePlayer(code, id))}
         />
+
+        {isHost && mode !== 'solo' && <TableSettings liveOdds={!!table.liveOdds} onChange={on => act(() => setLiveOdds(code, on))} />}
 
         {isHost && me && (
           <button onClick={() => act(() => removePlayer(code, uid))} className={`${secondaryBtn} w-full`}>
