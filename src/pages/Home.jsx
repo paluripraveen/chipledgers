@@ -35,6 +35,14 @@ export default function Home() {
       </header>
 
       <main className="max-w-lg mx-auto p-4 space-y-4">
+        <button
+          onClick={() => navigate('/odds')}
+          className="w-full bg-white dark:bg-gray-800 p-4 rounded-lg border border-amber-300 dark:border-amber-700 text-left hover:border-amber-500 transition-colors"
+        >
+          <p className="font-medium text-gray-900 dark:text-gray-100 text-lg">🃏 Live Odds</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400">Each player sees their own win % on their phone as the board comes out</p>
+        </button>
+
         <h2 className="font-semibold text-gray-700 dark:text-gray-300">Your Groups</h2>
 
         {loading ? (

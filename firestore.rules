@@ -13,5 +13,36 @@ service cloud.firestore {
     match /groups/{groupId} {
       allow read, write: if true;
     }
+
+    // Live odds tables. Hole cards and odds are private to each player; only the
+    // tableOdds Cloud Function (admin access) sees every hand.
+    match /oddsTables/{code} {
+      function isHost() {
+        return request.auth.uid == resource.data.hostUid;
+      }
+      // Players may only add, change or remove their own entry in the players map
+      function onlyOwnEntry() {
+        return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['players', 'updatedAt'])
+          && request.resource.data.players.diff(resource.data.players).affectedKeys().hasOnly([request.auth.uid]);
+      }
+
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && request.resource.data.hostUid == request.auth.uid;
+      allow update: if request.auth != null
+        && request.resource.data.hostUid == resource.data.hostUid
+        && (isHost() || onlyOwnEntry());
+      allow delete: if request.auth != null && isHost();
+
+      match /hands/{uid} {
+        allow read, write: if request.auth != null && request.auth.uid == uid;
+      }
+      match /odds/{uid} {
+        allow read: if request.auth != null && request.auth.uid == uid;
+      }
+      match /public/{docId} {
+        allow read: if request.auth != null;
+      }
+      // private/* (the function's bookkeeping) has no rules, so clients can't touch it
+    }
   }
 }
