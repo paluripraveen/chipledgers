@@ -7,8 +7,10 @@ import {
   updateDoc,
   deleteDoc,
   query,
+  where,
   orderBy,
   runTransaction,
+  writeBatch,
 } from 'firebase/firestore';
 import { db } from '../firebase';
 
@@ -67,13 +69,12 @@ async function updatePlayers(sessionId, mutate) {
 }
 
 export async function getSessions(groupId) {
-  const q = query(sessionsRef(), orderBy('date', 'desc'));
+  // Filter on the server (uses the groupId + date index) so we only download this group's sessions
+  const q = groupId
+    ? query(sessionsRef(), where('groupId', '==', groupId), orderBy('date', 'desc'))
+    : query(sessionsRef(), orderBy('date', 'desc'));
   const snap = await getDocs(q);
-  const all = snap.docs.map(d => normalizeSession(d.id, d.data()));
-  if (groupId) {
-    return all.filter(s => s.groupId === groupId);
-  }
-  return all;
+  return snap.docs.map(d => normalizeSession(d.id, d.data()));
 }
 
 export async function getSession(id) {
@@ -190,8 +191,13 @@ export async function deleteSession(sessionId) {
 export async function archiveSeason(groupId, seasonLabel) {
   const sessions = await getSessions(groupId);
   const completed = sessions.filter(s => s.status === 'completed' && !s.archived);
-  for (const session of completed) {
-    await updateDoc(sessionDoc(session.id), { archived: true, season: seasonLabel });
+  // Firestore batches hold up to 500 writes; each batch commits all-or-nothing
+  for (let i = 0; i < completed.length; i += 500) {
+    const batch = writeBatch(db);
+    for (const session of completed.slice(i, i + 500)) {
+      batch.update(sessionDoc(session.id), { archived: true, season: seasonLabel });
+    }
+    await batch.commit();
   }
   return completed.length;
 }

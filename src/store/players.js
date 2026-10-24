@@ -6,6 +6,9 @@ import {
   setDoc,
   updateDoc,
   deleteDoc,
+  query,
+  where,
+  documentId,
 } from 'firebase/firestore';
 import { db } from '../firebase';
 
@@ -33,8 +36,12 @@ export async function getPlayer(id) {
 
 export async function getPlayersByIds(ids) {
   if (!ids || ids.length === 0) return [];
-  const all = await getPlayers();
-  return all.filter(p => ids.includes(p.id));
+  // 'in' queries accept at most 30 values, so fetch in chunks
+  const chunks = [];
+  for (let i = 0; i < ids.length; i += 30) chunks.push(ids.slice(i, i + 30));
+  const snaps = await Promise.all(chunks.map(c => getDocs(query(playersRef(), where(documentId(), 'in', c)))));
+  const players = snaps.flatMap(s => s.docs).map(d => ({ id: d.id, ...d.data() }));
+  return players.sort((a, b) => (a.firstName || '').localeCompare(b.firstName || ''));
 }
 
 export async function createPlayer({ firstName, lastName, phone = '', email = '', paypalId = '' }) {

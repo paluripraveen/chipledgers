@@ -15,17 +15,32 @@ function formatDuration(seconds) {
   return `${s}s`;
 }
 
+// Ticks every second on its own so the rest of the session page doesn't re-render with it
+function SessionTimer({ createdAt }) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const start = createdAt ? new Date(createdAt).getTime() : Date.now();
+    const interval = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - start) / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [createdAt]);
+  return <p className="text-sm font-bold text-emerald-800 dark:text-emerald-200 font-mono">{formatDuration(elapsed)}</p>;
+}
+
 export default function Session() {
   const { groupId, id } = useParams();
   const navigate = useNavigate();
   const [session, setSession] = useState(null);
   const [groupMembers, setGroupMembers] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [elapsed, setElapsed] = useState(0);
   const [notes, setNotes] = useState('');
   const [notesSaved, setNotesSaved] = useState(false);
   const [ending, setEnding] = useState(false);
   const pendingWrites = useRef(new Set());
+
+  // Fetch the Summary page's code now so End Session never waits on a download
+  useEffect(() => { import('./Summary'); }, []);
 
   useEffect(() => {
     Promise.all([getSession(id), getGroup(groupId)]).then(async ([s, g]) => {
@@ -38,16 +53,6 @@ export default function Session() {
       setLoading(false);
     });
   }, [id, groupId]);
-
-  // Session timer
-  useEffect(() => {
-    if (!session || session.status === 'completed') return;
-    const start = session.createdAt ? new Date(session.createdAt).getTime() : Date.now();
-    const interval = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - start) / 1000));
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [session]);
 
   if (loading) return <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center"><p className="text-gray-400">Loading...</p></div>;
   if (!session) return <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center"><p className="text-gray-500">Session not found.</p></div>;
@@ -138,7 +143,7 @@ export default function Session() {
             </div>
             <div className="text-center px-3 py-1 bg-emerald-100 dark:bg-emerald-800 rounded-lg">
               <p className="text-xs text-emerald-600 dark:text-emerald-300">Duration</p>
-              <p className="text-sm font-bold text-emerald-800 dark:text-emerald-200 font-mono">{formatDuration(elapsed)}</p>
+              <SessionTimer createdAt={session.createdAt} />
             </div>
           </div>
         </div>
