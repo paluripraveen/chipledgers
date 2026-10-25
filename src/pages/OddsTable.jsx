@@ -125,7 +125,7 @@ function BoardSection({ board, isHost, blocked, canReveal, onSetBoard, onNextHan
               Reveal hands
             </button>
           )}
-          <button onClick={onNextHand} className={`${smallBtn} bg-amber-600 hover:bg-amber-700 text-white`}>New hand</button>
+          <button onClick={onNextHand} className={`${smallBtn} bg-amber-600 hover:bg-amber-700 text-white`}>Clear for next hand</button>
         </div>
       )}
 
@@ -551,7 +551,9 @@ export default function OddsTable() {
           blocked={[...board, ...(myCards || [])]}
           canReveal={canReveal}
           onSetBoard={b => act(() => setBoard(code, b))}
-          onNextHand={() => act(() => nextHand(code))}
+          onNextHand={() => {
+            if (confirm('Clear the board and everyone’s cards for the next hand?')) act(() => nextHand(code));
+          }}
           onReveal={() => act(() => setRevealed(code, true))}
         />
 
