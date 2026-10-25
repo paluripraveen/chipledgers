@@ -1,13 +1,13 @@
 import {
   doc,
   getDoc,
-  setDoc,
   updateDoc,
   deleteDoc,
   deleteField,
   onSnapshot,
   runTransaction,
   serverTimestamp,
+  writeBatch,
 } from 'firebase/firestore';
 import { getAuth, connectAuthEmulator, onAuthStateChanged, signInAnonymously } from 'firebase/auth';
 import { app, db } from '../firebase';
@@ -105,13 +105,16 @@ export function removePlayer(code, uid) {
 
 export async function setMyCards(code, handNumber, cards) {
   const { uid } = await ensureSignedIn();
-  await setDoc(doc(db, COLLECTION, code, 'hands', uid), { cards, handNumber, updatedAt: serverTimestamp() });
-  // Touching the table is what tells the odds function to recompute
-  await updateDoc(tableDoc(code), {
+  // One batch, so it's a single round trip and the table never points at cards not yet saved.
+  // Touching the table is what tells the odds function to recompute.
+  const batch = writeBatch(db);
+  batch.set(doc(db, COLLECTION, code, 'hands', uid), { cards, handNumber, updatedAt: serverTimestamp() });
+  batch.update(tableDoc(code), {
     [`players.${uid}.cardsFor`]: handNumber,
     [`players.${uid}.cardsAt`]: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
+  await batch.commit();
 }
 
 export function setFolded(code, uid, folded) {
